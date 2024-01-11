@@ -1,13 +1,13 @@
 import argparse
+
+import pytorch_lightning as pl
 import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, random_split
-from torchvision import transforms, models
+from torchvision import models, transforms
 from torchvision.datasets import CIFAR100
-import pytorch_lightning as pl
 from tqdm import tqdm
-
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--lr", default=0.1, type=float)
@@ -24,16 +24,20 @@ DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cp
 
 def run():
     # Dataset
-    train_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(32, padding=4),
-        transforms.ToTensor(),
-        transforms.Normalize([0.5071, 0.4865, 0.4409], [0.2673, 0.2564, 0.2762])
-    ])
-    test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize([0.5071, 0.4865, 0.4409], [0.2673, 0.2564, 0.2762])
-    ])
+    train_transform = transforms.Compose(
+        [
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomCrop(32, padding=4),
+            transforms.ToTensor(),
+            transforms.Normalize([0.5071, 0.4865, 0.4409], [0.2673, 0.2564, 0.2762]),
+        ]
+    )
+    test_transform = transforms.Compose(
+        [
+            transforms.ToTensor(),
+            transforms.Normalize([0.5071, 0.4865, 0.4409], [0.2673, 0.2564, 0.2762]),
+        ]
+    )
     train_set = CIFAR100(root=".", train=True, download=True, transform=train_transform)
     train_set, val_set = random_split(train_set, [0.8, 0.2])
     test_set = CIFAR100(root=".", train=False, download=True, transform=test_transform)
@@ -50,7 +54,7 @@ def run():
 
     optim = torch.optim.SGD(m.parameters(), lr=lr, momentum=0.9, weight_decay=5e-4)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=epochs, eta_min=5e-4)
-    
+
     # Train
     best_acc = 0.0
     for i in range(int(epochs)):
@@ -62,7 +66,7 @@ def run():
 
             loss = F.cross_entropy(m(x), y)
             loss_total += loss
-            
+
             pbar.set_postfix_str(f"loss: {loss:.2f}")
             optim.zero_grad()
             loss.backward()
@@ -93,4 +97,3 @@ def get_acc(model, dl):
 
 if __name__ == "__main__":
     run()
-

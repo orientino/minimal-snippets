@@ -1,11 +1,11 @@
-from pathlib import Path
 import os
+from pathlib import Path
+
 import numpy as np
 import torch
 from torch import nn
-from torchvision import transforms, models
-from torch.utils.data import Dataset, DataLoader
-
+from torch.utils.data import DataLoader, Dataset
+from torchvision import models, transforms
 
 data_dir = Path.home() / "opt/data/cifar/cifar-10-c"
 severity = 1
@@ -19,26 +19,25 @@ def run():
     m = m.to(DEVICE)
     m.load_state_dict(torch.load("resnet18_c10.pt"))
 
-    test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616])
-    ])
+    test_transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize([0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616])]
+    )
     corruptions = [
-        'gaussian_noise', 
-        'shot_noise', 
-        'impulse_noise', 
-        'defocus_blur',
-        'glass_blur',
-        'motion_blur', 
-        'zoom_blur',
-        'snow',   
-        'frost',
-        'fog',
-        'brightness',
-        'contrast',
-        'elastic_transform',
-        'pixelate',
-        'jpeg_compression',
+        "gaussian_noise",
+        "shot_noise",
+        "impulse_noise",
+        "defocus_blur",
+        "glass_blur",
+        "motion_blur",
+        "zoom_blur",
+        "snow",
+        "frost",
+        "fog",
+        "brightness",
+        "contrast",
+        "elastic_transform",
+        "pixelate",
+        "jpeg_compression",
     ]
     accs = {}
     for c in corruptions:
@@ -54,25 +53,25 @@ class CIFAR100C(Dataset):
         self.label_transform = label_transform
 
         data_path = os.path.join(dir, corruption + ".npy")
-        label_path = os.path.join(dir, 'labels.npy')
+        label_path = os.path.join(dir, "labels.npy")
         self.data = np.load(data_path)
         self.labels = np.load(label_path)
-        self.offset = (severity-1)*10000
-        
+        self.offset = (severity - 1) * 10000
+
         assert severity > 0 and severity < 6
-        
+
     def __getitem__(self, index):
-        imgs, lbls = self.data[index+self.offset], self.labels[index+self.offset]
+        imgs, lbls = self.data[index + self.offset], self.labels[index + self.offset]
         if self.transform is not None:
             imgs = self.transform(imgs)
         if self.label_transform is not None:
             lbls = self.target_transform(lbls)
-            
+
         return imgs, lbls
-    
+
     def __len__(self):
         return len(self.data) // 5
-        
+
 
 @torch.no_grad()
 def get_acc(model, dl):
