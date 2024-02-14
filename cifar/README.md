@@ -1,13 +1,13 @@
 ### Training
 Run `python train_c10.py`
 
-### Evaluation
+### Evaluation on CIFAR-Corrupted
 Download the corrupted dataset [CIFAR10C](https://zenodo.org/records/2535967) and [CIFAR100C](https://zenodo.org/records/3555552)
 
 Run `python eval_c10_corrupted.py`
 
 ### Results
-CIFAR `test_set` and the variations of `corrupted_set` with severity = 1
+CIFAR `test_set` accuracy and the variations of `corrupted_set` accuracy with severity = 1
 
 |                   | CIFAR10  | CIFAR100 |
 |-------------------|----------|----------|
