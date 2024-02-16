@@ -14,8 +14,6 @@ import torchvision.transforms.v2 as T
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-import wandb
-
 parser = argparse.ArgumentParser()
 parser.add_argument("--lr", default=0.1, type=float)
 parser.add_argument("--epochs", default=1, type=int)
@@ -33,24 +31,11 @@ debug = args.debug
 name = "resnet18.a1_in1k"
 savefile = f"{name}_yearbook_lr{lr}_ep{epochs}_seed{seed}"
 savefile = f"{name}_pretrained_yearbook_lr{lr}_ep{epochs}_seed{seed}" if pretrained else savefile
+pl.seed_everything(seed)
 DEVICE = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 
 def run():
-    pl.seed_everything(seed)
-    wandb.init(
-        project="yearbook",
-        config={
-            "lr": lr,
-            "epochs": epochs,
-            "name": name,
-            "pretrained": pretrained,
-            "seed": seed,
-            "savefile": savefile,
-        },
-        mode="disabled" if debug else "online",
-    )
-
     # Dataset
     data_dir = Path.home() / "opt/data/yearbook"
     transform = T.Compose([T.ToTensor(), T.Normalize([0.5709], [0.2742])])
@@ -75,23 +60,30 @@ def run():
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=epochs, eta_min=1e-3)
 
     for i in range(epochs):
-        loss = train(m, optim, sched, train_dl)
+        m.train()
+        loss_total = 0
+        pbar = tqdm(train_dl)
+        for itr, (x, y, g) in enumerate(pbar):
+            x, y = x.to(DEVICE), y.to(DEVICE)
+
+            loss = F.cross_entropy(m(x), y)
+            loss_total += loss
+
+            pbar.set_postfix_str(f"loss: {loss:.2f}")
+            optim.zero_grad()
+            loss.backward()
+            optim.step()
+        sched.step()
 
         if i % 2 == 0:
             m.eval()
             acc_train = get_acc(m, train_dl)
             acc_val = get_acc(m, val_dl)
-
-            wandb.log({"train/loss": loss})
-            wandb.log({"train/accuracy": acc_train})
-            wandb.log({"val/accuracy": acc_val})
             print(f"[epoch {i}] acc_train: {acc_train:.2f}, acc_val: {acc_val:.2f}")
 
     # Evaluate
     torch.save(m.state_dict(), Path.home() / f"opt/weights/yearbook/{savefile}.pt")
     acc_weight, accs = evaluate_groups(m, test_dl)
-    wandb.log({"test/acc_weight": acc_weight})
-    wandb.log({"test/acc_worst": min(accs.values())})
     print(f"[test] acc_weight: \t{acc_weight:.2f}")
     print(f"[test] acc_worst: \t{min(accs.values()):.2f}, group_worst: \t{min(accs, key=accs.get)}")
     print(accs)
@@ -189,25 +181,6 @@ def evaluate_groups(model, dl):
     weighted_acc /= len(preds)
 
     return weighted_acc, accs_dict
-
-
-def train(model, optim, sched, dl):
-    model.train()
-    loss_total = 0
-    pbar = tqdm(dl)
-    for itr, (x, y, g) in enumerate(pbar):
-        x, y = x.to(DEVICE), y.to(DEVICE)
-
-        loss = F.cross_entropy(model(x), y)
-        loss_total += loss
-
-        pbar.set_postfix_str(f"loss: {loss:.2f}")
-        optim.zero_grad()
-        loss.backward()
-        optim.step()
-    sched.step()
-
-    return loss_total / len(dl)
 
 
 if __name__ == "__main__":
