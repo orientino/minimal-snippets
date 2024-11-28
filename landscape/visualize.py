@@ -4,13 +4,19 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
+"""
+P_list: parameters of the model per layer, e.g. [64, 64, ..., 10]
+P: total number of parameters of the model
+N: number of weights, i.e. len(training_path)
+"""
+
 
 class PCACoordinates(object):
     def __init__(self, training_path):
-        self.pca_, self.components = get_path_components_(training_path)
-        self.origin_ = [w.clone() for w in training_path[-1]]
-        self.v0_ = normalize_weights(self.components[0], self.origin_)
-        self.v1_ = normalize_weights(self.components[1], self.origin_)
+        self.pca_, self.pcs = get_principal_components(training_path)
+        self.origin_ = [w.clone() for w in training_path[-1]]  # P_list
+        self.v0_ = normalize_weights(self.pcs[0], self.origin_)  # P_list
+        self.v1_ = normalize_weights(self.pcs[1], self.origin_)  # P_list
 
     def __call__(self, a, b):
         return [
@@ -53,14 +59,12 @@ class LossSurface(object):
         self.b_grid = b_grid
         self.loss_grid = loss_grid
 
-    def plot(self, scale=1.0, points=24, levels=20, ax=None, **kwargs):
-        xs = self.a_grid
-        ys = self.b_grid
-        zs = self.loss_grid
-        if ax is None:
-            _, ax = plt.subplots(**kwargs)
-            ax.set_aspect("equal")
-        # Set Levels
+    def plot(self, coords, training_path, levels=30, **kwargs):
+        xs, ys, zs = self.a_grid, self.b_grid, self.loss_grid
+
+        # Plot the loss surface
+        _, ax = plt.subplots(**kwargs)
+        ax.set_aspect("equal")
         min_loss = zs.min()
         max_loss = zs.max()
         levels = np.exp(np.linspace(np.log(min_loss), np.log(max_loss), num=levels))
@@ -69,12 +73,35 @@ class LossSurface(object):
             ys,
             zs,
             levels=levels,
-            cmap="magma",
-            linewidths=0.75,
+            cmap="coolwarm",
+            linewidths=0.5,
             norm=mpl.colors.LogNorm(vmin=min_loss, vmax=max_loss * 2.0),
         )
-        ax.clabel(CS, inline=True, fontsize=8, fmt="%1.2f")
-        return ax
+        ax.clabel(CS, inline=True, fontsize=5, fmt="%1.2f")
+
+        # Plot the training path
+        path2d = weights_to_coordinates(coords, training_path)
+        ax.scatter(
+            path2d[:, 0],
+            path2d[:, 1],
+            s=20,
+            c=range(path2d.shape[0]),
+            cmap="viridis",
+            norm=plt.Normalize(0, path2d.shape[0]),
+        )
+        plt.show()
+
+
+def get_principal_components(training_path, n_components=2):
+    """
+    Compute the first two principal components of the training path
+    """
+
+    weights_vectorized = vectorize_weights(training_path)  # [P, N] vectorize
+    pca = PCA(n_components=2, whiten=True)
+    pcs = pca.fit_transform(weights_vectorized)  # [P, 2]
+    weights = unvectorize_weights(pcs, training_path[0])  # [P_list, 2] un-vectorize
+    return pca, weights
 
 
 def weights_to_coordinates(coords, path):
@@ -82,55 +109,32 @@ def weights_to_coordinates(coords, path):
     Project the training path onto the first two principal components
     using the pseudoinverse.
     """
-    pcs = vectorize_weights([coords.v0_, coords.v1_])
-    pcs_i = np.linalg.pinv(pcs)
-    # use origin vector as center
-    w_c = np.squeeze(vectorize_weights([path[-1]]))
-    # center all the weights on the path and project onto components
-    coord_path = np.array(
-        [pcs_i @ (np.squeeze(vectorize_weights([w])) - w_c) for w in path]
-    )
+    w_c = vectorize_weights([coords.origin_])  # [P, 1]
+    pcs = vectorize_weights([coords.v0_, coords.v1_])  # [P, 2]
+    pcs_i = np.linalg.pinv(pcs)  # [2, P] pseudo-inverse
+
+    # center the weights and project into principla components
+    coord_path = [pcs_i @ (vectorize_weights([w]) - w_c) for w in path]
+    coord_path = np.array([c.flatten() for c in coord_path])  # [N, 2]
+
     return coord_path
 
 
-def plot_path(coords, training_path, ax=None, end=None, **kwargs):
-    path = weights_to_coordinates(coords, training_path)
-    if ax is None:
-        fig, ax = plt.subplots(**kwargs)
-    colors = range(path.shape[0])
-    end = path.shape[0] if end is None else end
-    norm = plt.Normalize(0, end)
-    ax.scatter(
-        path[:, 0],
-        path[:, 1],
-        s=4,
-        c=colors,
-        cmap="cividis",
-        norm=norm,
-    )
-    return ax
+# Helper functions -----------------------------------------------------------------------------------------------
 
 
-def get_path_components_(training_path, n_components=2):
-    weight_vectorized = vectorize_weights(training_path)  # vectorize weights
-    pca = PCA(n_components=2, whiten=True)
-    components = pca.fit_transform(weight_vectorized)
-    weight = unvectorize_weights(components, training_path[0])  # un-vectorize
-    return pca, weight
-
-
-def vectorize_weights(weight_list):
+def vectorize_weights(weights_list):
     vec_list = []
-    for weights in weight_list:
+    for weights in weights_list:
         vec = [w.detach().numpy().flatten() for w in weights]
         vec = np.concatenate(vec)
         vec_list.append(vec)
-    weight_matrix = np.column_stack(vec_list)
-    return weight_matrix
+    weights_matrix = np.column_stack(vec_list)
+    return weights_matrix
 
 
-def unvectorize_weights(weight_matrix, example):
-    weight_vecs = np.hsplit(weight_matrix, weight_matrix.shape[1])
+def unvectorize_weights(weights_matrix, example):
+    weight_vecs = np.hsplit(weights_matrix, weights_matrix.shape[1])
     sizes = [v.numel() for v in example]
     shapes = [v.shape for v in example]
     weight_list = []

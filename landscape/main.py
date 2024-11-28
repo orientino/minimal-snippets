@@ -2,8 +2,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
-
-from visualize import LossSurface, PCACoordinates, get_weights, plot_path
+from tqdm import tqdm
+from visualize import (
+    LossSurface,
+    PCACoordinates,
+    get_weights,
+)
 
 
 class QuadraticDataset(Dataset):
@@ -42,7 +46,7 @@ criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 training_path = [get_weights(model)]
-for epoch in range(50):
+for epoch in tqdm(range(50)):
     for x, y in ds:
         loss = criterion(model(x), y)
         optimizer.zero_grad()
@@ -56,6 +60,4 @@ for epoch in range(50):
 coords = PCACoordinates(training_path)
 loss_surface = LossSurface(model, ds.x, ds.y)
 loss_surface.compile(points=30, coords=coords, criterion=criterion, scale=0.5)
-ax = loss_surface.plot(dpi=100)
-
-plot_path(coords, training_path, ax)
+loss_surface.plot(coords, training_path, dpi=100)
