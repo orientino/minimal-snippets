@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -60,4 +61,7 @@ for epoch in tqdm(range(50)):
 coords = PCACoordinates(training_path)
 loss_surface = LossSurface(model, ds.x, ds.y)
 loss_surface.compile(points=30, coords=coords, criterion=criterion, scale=0.5)
-loss_surface.plot(coords, training_path, dpi=100)
+
+ax = loss_surface.plot_surface(levels=30, dpi=100)
+ax = loss_surface.plot_path(coords, training_path, ax)
+plt.show()

@@ -59,15 +59,13 @@ class LossSurface(object):
         self.b_grid = b_grid
         self.loss_grid = loss_grid
 
-    def plot(self, coords, training_path, levels=30, **kwargs):
+    def plot_surface(self, levels=30, **kwargs):
         xs, ys, zs = self.a_grid, self.b_grid, self.loss_grid
-
-        # Plot the loss surface
         _, ax = plt.subplots(**kwargs)
         ax.set_aspect("equal")
-        min_loss = zs.min()
-        max_loss = zs.max()
-        levels = np.exp(np.linspace(np.log(min_loss), np.log(max_loss), num=levels))
+        zmin = zs.min()
+        zmax = zs.max()
+        levels = np.exp(np.linspace(np.log(zmin), np.log(zmax), num=levels))
         CS = ax.contour(
             xs,
             ys,
@@ -75,11 +73,12 @@ class LossSurface(object):
             levels=levels,
             cmap="coolwarm",
             linewidths=0.5,
-            norm=mpl.colors.LogNorm(vmin=min_loss, vmax=max_loss * 2.0),
+            norm=mpl.colors.LogNorm(vmin=zmin, vmax=zmax * 1.5),
         )
         ax.clabel(CS, inline=True, fontsize=5, fmt="%1.2f")
+        return ax
 
-        # Plot the training path
+    def plot_path(self, coords, training_path, ax):
         path2d = weights_to_coordinates(coords, training_path)
         ax.scatter(
             path2d[:, 0],
@@ -89,7 +88,7 @@ class LossSurface(object):
             cmap="viridis",
             norm=plt.Normalize(0, path2d.shape[0]),
         )
-        plt.show()
+        return ax
 
 
 def get_principal_components(training_path, n_components=2):
