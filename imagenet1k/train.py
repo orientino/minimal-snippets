@@ -4,18 +4,17 @@ Follows big_vision's vit_s16_i1k.py configuration.
 """
 
 import argparse
-import math
 import os
 import time
 
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
-from torch.cuda.amp import autocast
-from torch.nn.parallel import DistributedDataParallel as DDP
-
 from data import create_dataloaders, mixup_criterion, mixup_data
 from model import vit_small_patch16_224
+from torch.amp import autocast
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 def setup_distributed():
@@ -40,18 +39,22 @@ def cleanup_distributed():
     dist.destroy_process_group()
 
 
-def get_cosine_schedule_with_warmup(
-    optimizer, num_warmup_steps, num_training_steps, min_lr=0.0
+def cosine_scheduler(
+    base_lr, final_lr, epochs, niter_per_ep, warmup_epochs=0, start_warmup_lr=0
 ):
-    def lr_lambda(current_step):
-        if current_step < num_warmup_steps:
-            return float(current_step) / float(max(1, num_warmup_steps))
-        progress = float(current_step - num_warmup_steps) / float(
-            max(1, num_training_steps - num_warmup_steps)
-        )
-        return max(min_lr, 0.5 * (1.0 + math.cos(math.pi * progress)))
+    warmup_schedule = np.array([])
+    warmup_iters = warmup_epochs * niter_per_ep
+    if warmup_epochs > 0:
+        warmup_schedule = np.linspace(start_warmup_lr, base_lr, warmup_iters)
 
-    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    iters = np.arange(epochs * niter_per_ep - warmup_iters)
+    schedule = final_lr + 0.5 * (base_lr - final_lr) * (
+        1 + np.cos(np.pi * iters / len(iters))
+    )
+
+    schedule = np.concatenate((warmup_schedule, schedule))
+    assert len(schedule) == epochs * niter_per_ep
+    return schedule
 
 
 def tr_one_epoch(model, tr_loader, criterion, optimizer, scheduler, epoch, args, rank):
@@ -60,9 +63,14 @@ def tr_one_epoch(model, tr_loader, criterion, optimizer, scheduler, epoch, args,
 
     total_loss = 0
     total_samples = 0
-    start_time = time.time()
+    niter_per_ep = len(tr_loader)
 
     for step, (images, labels) in enumerate(tr_loader):
+        global_step = epoch * niter_per_ep + step
+        lr = scheduler[global_step]
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = lr
+
         images = images.cuda(non_blocking=True)
         labels = labels.cuda(non_blocking=True)
 
@@ -72,7 +80,7 @@ def tr_one_epoch(model, tr_loader, criterion, optimizer, scheduler, epoch, args,
                 images, labels, alpha=args.mixup_alpha
             )
 
-        with autocast(dtype=torch.bfloat16):
+        with autocast("cuda", dtype=torch.bfloat16):
             outputs = model(images)
             if use_mixup:
                 loss = mixup_criterion(criterion, outputs, labels_a, labels_b, lam)
@@ -83,22 +91,16 @@ def tr_one_epoch(model, tr_loader, criterion, optimizer, scheduler, epoch, args,
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         optimizer.step()
-        scheduler.step()
 
         batch_size = images.size(0)
         total_loss += loss.item() * batch_size
         total_samples += batch_size
 
         if rank == 0 and step % args.log_interval == 0:
-            elapsed = time.time() - start_time
-            images_per_sec = total_samples / elapsed * dist.get_world_size()
-            current_lr = scheduler.get_last_lr()[0]
-
             print(
                 f"Epoch [{epoch}] Step [{step}/{len(tr_loader)}] "
                 f"Loss: {loss.item():.4f} "
-                f"LR: {current_lr:.6f} "
-                f"Images/sec: {images_per_sec:.1f}"
+                f"LR: {lr:.6f} "
             )
 
     return total_loss / total_samples
@@ -117,7 +119,7 @@ def validate(model, vl_loader, criterion, rank):
             images = images.cuda(non_blocking=True)
             labels = labels.cuda(non_blocking=True)
 
-            with autocast(dtype=torch.bfloat16):
+            with autocast("cuda", dtype=torch.bfloat16):
                 outputs = model(images)
                 loss = criterion(outputs, labels)
 
@@ -155,7 +157,7 @@ def main():
     parser.add_argument("--bs", type=int, default=256)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--wd", type=float, default=0.0001)
-    parser.add_argument("--warmup_steps", type=int, default=10000)
+    parser.add_argument("--warmup_epochs", type=int, default=5)
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--mixup_prob", type=float, default=0.2)
     parser.add_argument("--mixup_alpha", type=float, default=0.5)
@@ -185,11 +187,12 @@ def main():
         weight_decay=args.wd,
         betas=(0.9, 0.999),
     )
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=args.warmup_steps,
-        num_training_steps=args.epochs * len(tr_loader),
-        min_lr=0.0,
+    scheduler = cosine_scheduler(
+        base_lr=args.lr,
+        final_lr=0,
+        epochs=args.epochs,
+        niter_per_ep=len(tr_loader),
+        warmup_epochs=args.warmup_epochs,
     )
 
     if rank == 0:
@@ -231,7 +234,6 @@ def main():
                 "epoch": epoch,
                 "model": model.module.state_dict(),
                 "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
                 "args": args,
             }
 

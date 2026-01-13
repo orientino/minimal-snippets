@@ -36,7 +36,7 @@ BATCH_SIZE=256  # Per GPU (total = 256 * 4 = 1024)
 EPOCHS=90
 LR=0.001
 WEIGHT_DECAY=0.0001
-WARMUP_STEPS=10000
+WARMUP_EPOCHS=5
 NUM_WORKERS=8
 
 torchrun \
@@ -48,6 +48,6 @@ torchrun \
     --bs $BATCH_SIZE \
     --lr $LR \
     --wd $WEIGHT_DECAY \
-    --warmup_steps $WARMUP_STEPS \
+    --warmup_epochs $WARMUP_EPOCHS \
     --num_workers $NUM_WORKERS \
     --dir_output ./checkpoints

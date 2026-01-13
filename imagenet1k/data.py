@@ -8,11 +8,11 @@ import torch
 import torch.distributed as dist
 from datasets import load_dataset
 from timm.data.auto_augment import rand_augment_transform
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from torchvision import transforms
 
 
-class ImageNetDataset(torch.utils.data.Dataset):
+class ImageNetDataset(Dataset):
     """Wrapper for HuggingFace ImageNet dataset with transforms."""
 
     def __init__(self, hf_dataset, transform=None):
@@ -78,26 +78,18 @@ def mixup_criterion(criterion, pred, y_a, y_b, lam):
     return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
 
 
-def create_tr_dataset(split="train[:1%]"):
-    print(f"Loading ImageNet-1k {split} split...")
-    dataset = load_dataset("ILSVRC/imagenet-1k", split=split)
-    return ImageNetDataset(dataset, get_tr_transforms())
-
-
-def create_vl_dataset(split="validation"):
-    print(f"Loading ImageNet-1k {split} split...")
-    dataset = load_dataset("ILSVRC/imagenet-1k", split=split)
-    return ImageNetDataset(dataset, get_vl_transforms())
-
-
 def create_dataloaders(
     batch_size_per_gpu=256,
     num_workers=8,
     pin_memory=True,
     distributed=True,
 ):
-    tr_dataset = create_tr_dataset()
-    vl_dataset = create_vl_dataset()
+    tr_dataset = ImageNetDataset(
+        load_dataset("ILSVRC/imagenet-1k", split="train[:99%]"), get_tr_transforms()
+    )
+    vl_dataset = ImageNetDataset(
+        load_dataset("ILSVRC/imagenet-1k", split="validation"), get_vl_transforms()
+    )
 
     if distributed:
         tr_sampler = DistributedSampler(
