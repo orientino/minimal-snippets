@@ -25,12 +25,10 @@ def setup_distributed():
         rank = 0
         world_size = 1
         local_rank = 0
-
     torch.cuda.set_device(local_rank)
     dist.init_process_group(
         backend="nccl", init_method="env://", world_size=world_size, rank=rank
     )
-
     return rank, world_size, local_rank
 
 
@@ -66,8 +64,9 @@ def main():
     parser.add_argument("--mixup_alpha", type=float, default=0.5)
     parser.add_argument("--dir_output", type=str, required=True)
     parser.add_argument("--dir_data", type=str, required=True)
-    parser.add_argument("--num_workers", type=int, default=4)
-    parser.add_argument("--log_interval", type=int, default=50)
+    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--log_interval", type=int, default=100)
+    parser.add_argument("--compile", action="store_true")
     args = parser.parse_args()
 
     rank, world_size, local_rank = setup_distributed()
@@ -86,6 +85,7 @@ def main():
 
     model = vit_small_patch16_224(num_classes=1000).cuda()
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+    model = torch.compile(model) if args.compile else model
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -134,16 +134,13 @@ def main():
                     loss = criterion(model(x), y)
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
 
             tr_loss += loss.item() * x.size(0)
             tr_n += x.size(0)
             if rank == 0 and step % args.log_interval == 0:
                 print(f"ep {epoch} step {step} loss {loss.item():.4f}")
-        metrics = torch.tensor([tr_loss, tr_n], device="cuda")
-        dist.all_reduce(metrics)
-        tr_loss = metrics[0].item() / metrics[1].item()
 
         # Validate
         model.eval()

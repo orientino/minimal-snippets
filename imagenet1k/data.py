@@ -1,5 +1,5 @@
 """
-Data loading and augmentation for ImageNet-1k training.
+Data loading for ImageNet-1k training.
 """
 
 import os
@@ -35,6 +35,8 @@ def create_dataloaders(
     pin_memory=True,
     distributed=True,
 ):
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+
     tr_transform = T.Compose(
         [
             T.RandomResizedCrop(224, scale=(0.05, 1.0)),
@@ -56,7 +58,6 @@ def create_dataloaders(
         ]
     )
 
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
     tr_dataset = (
         wds.WebDataset(
             os.path.join(dir_data, "imagenet1k-train-{0000..1023}.tar"),
@@ -82,15 +83,15 @@ def create_dataloaders(
         batch_size=batch_size_per_gpu,
         num_workers=num_workers,
         pin_memory=pin_memory,
+        persistent_workers=True,
         drop_last=True,
-        # persistent_workers=num_workers > 0,
     )
     vl_loader = DataLoader(
         vl_dataset,
         batch_size=batch_size_per_gpu,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        # persistent_workers=num_workers > 0,
+        persistent_workers=True,
     )
 
     steps_per_epoch = IMAGENET_TRAIN_SAMPLES // (batch_size_per_gpu * world_size)

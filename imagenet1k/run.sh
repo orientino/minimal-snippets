@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J imagenet1k
+#SBATCH -J in1k_compile
 #SBATCH --mail-type=end,fail
 #SBATCH --mail-user=chenxiang.zhang@uni.lu
 #SBATCH --account=p200535
@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=4
 #SBATCH --ntasks-per-node=4
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=16
 #SBATCH --gpus=4
 #SBATCH --partition=gpu
 #SBATCH --time=1-00:00:00
@@ -21,7 +21,7 @@ echo -e "Node:\t ${SLURM_NODELIST}"
 echo -e "--------------------------------\n"
 
 eval "$(micromamba shell hook --shell bash)"
-micromamba activate tests
+micromamba activate imagenet
 
 DIR_DATA="/project/home/p200535/data/imagenet1k"
 DIR_OUTPUT="./checkpoints"
@@ -30,7 +30,7 @@ EPOCHS=90
 BS=256  # Per GPU (total = 256 * 4 = 1024)
 LR=0.001
 WD=0.0001
-WARMUP_EPOCHS=2
+WARMUP_EPOCHS=5
 
 torchrun \
     --standalone \
@@ -43,4 +43,6 @@ torchrun \
     --epochs $EPOCHS \
     --warmup_epochs $WARMUP_EPOCHS \
     --dir_data $DIR_DATA \
-    --dir_output $DIR_OUTPUT
+    --dir_output $DIR_OUTPUT \
+    --num_workers 16 \
+    --compile
