@@ -127,7 +127,9 @@ class VisionTransformer(nn.Module):
             embed_dim=embed_dim,
         )
 
-        pos_embed = get_2d_sincos_pos_embed(embed_dim, int(self.patch_embed.num_patches**0.5))
+        pos_embed = get_2d_sincos_pos_embed(
+            embed_dim, int(self.patch_embed.num_patches**0.5)
+        )
         self.register_buffer(
             "pos_embed", torch.from_numpy(pos_embed).float().unsqueeze(0)
         )

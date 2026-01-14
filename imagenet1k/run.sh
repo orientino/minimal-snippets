@@ -23,31 +23,29 @@ echo -e "--------------------------------\n"
 eval "$(micromamba shell hook --shell bash)"
 micromamba activate tests
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3
-export OMP_NUM_THREADS=8
-export NCCL_DEBUG=INFO
-export HF_HOME="/project/home/p200535/.cache"
-
-mkdir -p checkpoints
-mkdir -p logs
-
+# export CUDA_VISIBLE_DEVICES=0,1,2,3
+# export HF_HOME="/project/home/p200535/.cache"
+# mkdir -p checkpoints
 # Training configuration
-BATCH_SIZE=256  # Per GPU (total = 256 * 4 = 1024)
+
+DIR_DATA="/project/home/p200535/data/imagenet1k"
+DIR_OUTPUT="./checkpoints"
+
 EPOCHS=90
+BS=256  # Per GPU (total = 256 * 4 = 1024)
 LR=0.001
-WEIGHT_DECAY=0.0001
-WARMUP_EPOCHS=5
-NUM_WORKERS=8
+WD=0.0001
+WARMUP_EPOCHS=2
 
 torchrun \
     --standalone \
     --nnodes=1 \
     --nproc_per_node=4 \
     train.py \
-    --epochs $EPOCHS \
-    --bs $BATCH_SIZE \
+    --bs $BS \
     --lr $LR \
-    --wd $WEIGHT_DECAY \
+    --wd $WD \
+    --epochs $EPOCHS \
     --warmup_epochs $WARMUP_EPOCHS \
-    --num_workers $NUM_WORKERS \
-    --dir_output ./checkpoints
+    --dir_data $DIR_DATA \
+    --dir_output $DIR_OUTPUT

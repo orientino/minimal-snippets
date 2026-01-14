@@ -1,6 +1,5 @@
 """
 Training script for ViT-S/16 on ImageNet-1k with DDP.
-Follows big_vision's vit_s16_i1k.py configuration.
 """
 
 import argparse
@@ -57,55 +56,6 @@ def cosine_scheduler(
     return schedule
 
 
-def tr_one_epoch(model, tr_loader, criterion, optimizer, scheduler, epoch, args, rank):
-    model.train()
-    tr_loader.sampler.set_epoch(epoch)
-
-    total_loss = 0
-    total_samples = 0
-    niter_per_ep = len(tr_loader)
-
-    for step, (images, labels) in enumerate(tr_loader):
-        global_step = epoch * niter_per_ep + step
-        lr = scheduler[global_step]
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr
-
-        images = images.cuda(non_blocking=True)
-        labels = labels.cuda(non_blocking=True)
-
-        use_mixup = torch.rand(1).item() < args.mixup_prob
-        if use_mixup:
-            images, labels_a, labels_b, lam = mixup_data(
-                images, labels, alpha=args.mixup_alpha
-            )
-
-        with autocast("cuda", dtype=torch.bfloat16):
-            outputs = model(images)
-            if use_mixup:
-                loss = mixup_criterion(criterion, outputs, labels_a, labels_b, lam)
-            else:
-                loss = criterion(outputs, labels)
-
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-        optimizer.step()
-
-        batch_size = images.size(0)
-        total_loss += loss.item() * batch_size
-        total_samples += batch_size
-
-        if rank == 0 and step % args.log_interval == 0:
-            print(
-                f"Epoch [{epoch}] Step [{step}/{len(tr_loader)}] "
-                f"Loss: {loss.item():.4f} "
-                f"LR: {lr:.6f} "
-            )
-
-    return total_loss / total_samples
-
-
 def validate(model, vl_loader, criterion, rank):
     model.eval()
 
@@ -152,26 +102,29 @@ def validate(model, vl_loader, criterion, rank):
 
 
 def main():
-    parser = argparse.ArgumentParser("ViT-S/16 ImageNet-1k Training")
-    parser.add_argument("--epochs", type=int, default=90)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--bs", type=int, default=256)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--wd", type=float, default=0.0001)
-    parser.add_argument("--warmup_epochs", type=int, default=5)
+    parser.add_argument("--epochs", type=int, default=90)
+    parser.add_argument("--warmup_epochs", type=int, default=2)
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--mixup_prob", type=float, default=0.2)
     parser.add_argument("--mixup_alpha", type=float, default=0.5)
     parser.add_argument("--dir_output", type=str, default="./checkpoints")
-    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--dir_data", type=str, required=True)
+    parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--log_interval", type=int, default=50)
-    parser.add_argument("--local_rank", type=int, default=-1)
     args = parser.parse_args()
+
     rank, world_size, local_rank = setup_distributed()
 
     torch.manual_seed(42 + rank)
     torch.cuda.manual_seed(42 + rank)
+    torch.backends.cudnn.benchmark = True
 
-    tr_loader, vl_loader, tr_sampler, vl_sampler = create_dataloaders(
+    tr_loader, vl_loader, steps_per_epoch = create_dataloaders(
+        dir_data=args.dir_data,
         batch_size_per_gpu=args.bs,
         num_workers=args.num_workers,
         pin_memory=True,
@@ -191,7 +144,7 @@ def main():
         base_lr=args.lr,
         final_lr=0,
         epochs=args.epochs,
-        niter_per_ep=len(tr_loader),
+        niter_per_ep=steps_per_epoch,
         warmup_epochs=args.warmup_epochs,
     )
 
@@ -199,22 +152,59 @@ def main():
         print(f"Starting training on {world_size} GPUs")
         print(f"Batch size per GPU: {args.bs}")
         print(f"Total batch size: {args.bs * world_size}")
-        print(f"Output directory: {args.dir_output}")
         print(f"Model params: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
-        print(f"Training samples: {len(tr_loader.dataset)}")
-        print(f"Validation samples: {len(vl_loader.dataset)}")
-        print(f"Steps per epoch: {len(tr_loader)}")
+        print(f"Steps per epoch: {steps_per_epoch}")
         print(f"\n{'=' * 80}")
         print("Starting training")
         print(f"{'=' * 80}\n")
+
+    # Training loop
+    # -------------------------------------------------------
 
     best_acc = 0.0
     for epoch in range(args.epochs):
         epoch_start_time = time.time()
 
-        tr_loss = tr_one_epoch(
-            model, tr_loader, criterion, optimizer, scheduler, epoch, args, rank
-        )
+        model.train()
+        total_loss = 0
+        total_samples = 0
+        for step, (images, labels) in enumerate(tr_loader):
+            if step >= steps_per_epoch:
+                break
+
+            lr = scheduler[epoch * steps_per_epoch + step]
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
+
+            images = images.cuda(non_blocking=True)
+            labels = labels.cuda(non_blocking=True)
+
+            if torch.rand(1).item() < args.mixup_prob:
+                images, labels_a, labels_b, lam = mixup_data(
+                    images, labels, alpha=args.mixup_alpha
+                )
+                with autocast("cuda", dtype=torch.bfloat16):
+                    loss = mixup_criterion(
+                        criterion, model(images), labels_a, labels_b, lam
+                    )
+            else:
+                with autocast("cuda", dtype=torch.bfloat16):
+                    loss = criterion(model(images), labels)
+
+            optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            optimizer.step()
+
+            total_loss += loss.item() * images.size(0)
+            total_samples += images.size(0)
+
+            if rank == 0 and step % args.log_interval == 0:
+                print(
+                    f"Epoch [{epoch}] Step [{step}/{steps_per_epoch}] Loss: {loss.item():.4f} LR: {lr:.6f}"
+                )
+
+        tr_loss = total_loss / total_samples
         vl_loss, top1_acc, top5_acc = validate(model, vl_loader, criterion, rank)
 
         epoch_time = time.time() - epoch_start_time
