@@ -7,10 +7,10 @@ import os
 import numpy as np
 import torch
 import torch.distributed as dist
+import torchvision.transforms as T
 import webdataset as wds
 from timm.data.auto_augment import rand_augment_transform
 from torch.utils.data import DataLoader
-from torchvision import T
 
 IMAGENET_TRAIN_SAMPLES = 1281167
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
@@ -35,16 +35,10 @@ def create_dataloaders(
     pin_memory=True,
     distributed=True,
 ):
-    world_size = dist.get_world_size() if dist.is_initialized() else 1
-
     tr_transform = T.Compose(
         [
-            T.RandomResizedCrop(
-                224,
-                scale=(0.05, 1.0),
-                interpolation=T.InterpolationMode.BILINEAR,
-            ),
-            T.RandomHorizontalFlip(p=0.5),
+            T.RandomResizedCrop(224, scale=(0.05, 1.0)),
+            T.RandomHorizontalFlip(),
             rand_augment_transform(
                 config_str="rand-m2-n10",
                 hparams={"translate_const": 100, "img_mean": (128, 128, 128)},
@@ -55,13 +49,14 @@ def create_dataloaders(
     )
     vl_transform = T.Compose(
         [
-            T.Resize(256, interpolation=T.InterpolationMode.BILINEAR),
+            T.Resize(256),
             T.CenterCrop(224),
             T.ToTensor(),
-            T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
+            T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
         ]
     )
 
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
     tr_dataset = (
         wds.WebDataset(
             os.path.join(dir_data, "imagenet1k-train-{0000..1023}.tar"),
@@ -81,21 +76,21 @@ def create_dataloaders(
         .decode("pil")
         .map(lambda x: (vl_transform(x["jpg"]), int(x["cls"])))
     )
+
     tr_loader = DataLoader(
         tr_dataset,
         batch_size=batch_size_per_gpu,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        persistent_workers=num_workers > 0,
         drop_last=True,
+        # persistent_workers=num_workers > 0,
     )
     vl_loader = DataLoader(
         vl_dataset,
         batch_size=batch_size_per_gpu,
         num_workers=num_workers,
         pin_memory=pin_memory,
-        persistent_workers=num_workers > 0,
-        drop_last=False,
+        # persistent_workers=num_workers > 0,
     )
 
     steps_per_epoch = IMAGENET_TRAIN_SAMPLES // (batch_size_per_gpu * world_size)

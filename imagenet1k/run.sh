@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=4
 #SBATCH --ntasks-per-node=4
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --gpus=4
 #SBATCH --partition=gpu
 #SBATCH --time=1-00:00:00
@@ -22,11 +22,6 @@ echo -e "--------------------------------\n"
 
 eval "$(micromamba shell hook --shell bash)"
 micromamba activate tests
-
-# export CUDA_VISIBLE_DEVICES=0,1,2,3
-# export HF_HOME="/project/home/p200535/.cache"
-# mkdir -p checkpoints
-# Training configuration
 
 DIR_DATA="/project/home/p200535/data/imagenet1k"
 DIR_OUTPUT="./checkpoints"

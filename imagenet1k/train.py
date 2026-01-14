@@ -38,67 +38,20 @@ def cleanup_distributed():
     dist.destroy_process_group()
 
 
-def cosine_scheduler(
-    base_lr, final_lr, epochs, niter_per_ep, warmup_epochs=0, start_warmup_lr=0
-):
+def cosine_scheduler(base_lr, final_lr, epochs, steps_per_epoch, warmup_epochs=0):
     warmup_schedule = np.array([])
-    warmup_iters = warmup_epochs * niter_per_ep
+    warmup_iters = warmup_epochs * steps_per_epoch
     if warmup_epochs > 0:
-        warmup_schedule = np.linspace(start_warmup_lr, base_lr, warmup_iters)
+        warmup_schedule = np.linspace(0, base_lr, warmup_iters)
 
-    iters = np.arange(epochs * niter_per_ep - warmup_iters)
+    iters = np.arange(epochs * steps_per_epoch - warmup_iters)
     schedule = final_lr + 0.5 * (base_lr - final_lr) * (
         1 + np.cos(np.pi * iters / len(iters))
     )
 
     schedule = np.concatenate((warmup_schedule, schedule))
-    assert len(schedule) == epochs * niter_per_ep
+    assert len(schedule) == epochs * steps_per_epoch
     return schedule
-
-
-def validate(model, vl_loader, criterion, rank):
-    model.eval()
-
-    total_loss = 0
-    total_correct_top1 = 0
-    total_correct_top5 = 0
-    total_samples = 0
-
-    with torch.no_grad():
-        for images, labels in vl_loader:
-            images = images.cuda(non_blocking=True)
-            labels = labels.cuda(non_blocking=True)
-
-            with autocast("cuda", dtype=torch.bfloat16):
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-
-            _, pred_top5 = outputs.topk(5, dim=1, largest=True, sorted=True)
-            pred_top1 = pred_top5[:, 0]
-
-            correct_top1 = pred_top1.eq(labels).sum().item()
-            correct_top5 = (
-                pred_top5.eq(labels.view(-1, 1).expand_as(pred_top5)).sum().item()
-            )
-
-            batch_size = images.size(0)
-            total_loss += loss.item() * batch_size
-            total_correct_top1 += correct_top1
-            total_correct_top5 += correct_top5
-            total_samples += batch_size
-
-    metrics = torch.tensor(
-        [total_loss, total_correct_top1, total_correct_top5, total_samples],
-        dtype=torch.float32,
-        device="cuda",
-    )
-    dist.all_reduce(metrics, op=dist.ReduceOp.SUM)
-
-    avg_loss = metrics[0].item() / metrics[3].item()
-    top1_acc = metrics[1].item() / metrics[3].item() * 100
-    top5_acc = metrics[2].item() / metrics[3].item() * 100
-
-    return avg_loss, top1_acc, top5_acc
 
 
 def main():
@@ -111,7 +64,7 @@ def main():
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--mixup_prob", type=float, default=0.2)
     parser.add_argument("--mixup_alpha", type=float, default=0.5)
-    parser.add_argument("--dir_output", type=str, default="./checkpoints")
+    parser.add_argument("--dir_output", type=str, required=True)
     parser.add_argument("--dir_data", type=str, required=True)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--log_interval", type=int, default=50)
@@ -144,98 +97,92 @@ def main():
         base_lr=args.lr,
         final_lr=0,
         epochs=args.epochs,
-        niter_per_ep=steps_per_epoch,
+        steps_per_epoch=steps_per_epoch,
         warmup_epochs=args.warmup_epochs,
     )
 
     if rank == 0:
+        os.makedirs(args.dir_output, exist_ok=True)
         print(f"Starting training on {world_size} GPUs")
         print(f"Batch size per GPU: {args.bs}")
         print(f"Total batch size: {args.bs * world_size}")
         print(f"Model params: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
         print(f"Steps per epoch: {steps_per_epoch}")
-        print(f"\n{'=' * 80}")
-        print("Starting training")
-        print(f"{'=' * 80}\n")
-
-    # Training loop
-    # -------------------------------------------------------
 
     best_acc = 0.0
     for epoch in range(args.epochs):
-        epoch_start_time = time.time()
+        t0 = time.time()
 
+        # Train
         model.train()
-        total_loss = 0
-        total_samples = 0
-        for step, (images, labels) in enumerate(tr_loader):
+        tr_loss, tr_n = 0, 0
+        for step, (x, y) in enumerate(tr_loader):
             if step >= steps_per_epoch:
                 break
 
             lr = scheduler[epoch * steps_per_epoch + step]
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = lr
+            for p in optimizer.param_groups:
+                p["lr"] = lr
 
-            images = images.cuda(non_blocking=True)
-            labels = labels.cuda(non_blocking=True)
-
+            x, y = x.cuda(non_blocking=True), y.cuda(non_blocking=True)
             if torch.rand(1).item() < args.mixup_prob:
-                images, labels_a, labels_b, lam = mixup_data(
-                    images, labels, alpha=args.mixup_alpha
-                )
+                x, y_a, y_b, lam = mixup_data(x, y, alpha=args.mixup_alpha)
                 with autocast("cuda", dtype=torch.bfloat16):
-                    loss = mixup_criterion(
-                        criterion, model(images), labels_a, labels_b, lam
-                    )
+                    loss = mixup_criterion(criterion, model(x), y_a, y_b, lam)
             else:
                 with autocast("cuda", dtype=torch.bfloat16):
-                    loss = criterion(model(images), labels)
-
+                    loss = criterion(model(x), y)
             optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
 
-            total_loss += loss.item() * images.size(0)
-            total_samples += images.size(0)
-
+            tr_loss += loss.item() * x.size(0)
+            tr_n += x.size(0)
             if rank == 0 and step % args.log_interval == 0:
-                print(
-                    f"Epoch [{epoch}] Step [{step}/{steps_per_epoch}] Loss: {loss.item():.4f} LR: {lr:.6f}"
-                )
+                print(f"ep {epoch} step {step} loss {loss.item():.4f}")
+        metrics = torch.tensor([tr_loss, tr_n], device="cuda")
+        dist.all_reduce(metrics)
+        tr_loss = metrics[0].item() / metrics[1].item()
 
-        tr_loss = total_loss / total_samples
-        vl_loss, top1_acc, top5_acc = validate(model, vl_loader, criterion, rank)
+        # Validate
+        model.eval()
+        vl_loss, vl_correct1, vl_correct5, vl_n = 0, 0, 0, 0
+        with torch.no_grad():
+            for x, y in vl_loader:
+                x, y = x.cuda(non_blocking=True), y.cuda(non_blocking=True)
+                with autocast("cuda", dtype=torch.bfloat16):
+                    out = model(x)
+                vl_loss += criterion(out, y).item() * x.size(0)
+                top5 = out.topk(5, dim=1)[1]
+                vl_correct1 += top5[:, 0].eq(y).sum().item()
+                vl_correct5 += top5.eq(y.view(-1, 1)).sum().item()
+                vl_n += x.size(0)
+        metrics = torch.tensor([vl_loss, vl_correct1, vl_correct5, vl_n], device="cuda")
+        dist.all_reduce(metrics)
+        vl_loss, vl_acc1, vl_acc5 = (
+            metrics[0].item() / metrics[3].item(),
+            metrics[1].item() / metrics[3].item() * 100,
+            metrics[2].item() / metrics[3].item() * 100,
+        )
 
-        epoch_time = time.time() - epoch_start_time
-
+        # Logging and checkpointing
         if rank == 0:
-            print(f"\n{'=' * 80}")
-            print(f"Epoch [{epoch}/{args.epochs}] Summary:")
-            print(f"  Train Loss: {tr_loss:.4f}")
-            print(f"  Val Loss:   {vl_loss:.4f}")
-            print(f"  Top-1 Acc:  {top1_acc:.2f}%")
-            print(f"  Top-5 Acc:  {top5_acc:.2f}%")
-            print(f"  Time: {epoch_time / 60:.1f} min")
-            print(f"{'=' * 80}\n")
-
-            os.makedirs(args.dir_output, exist_ok=True)
-            checkpoint_state = {
+            print(
+                f"ep {epoch} "
+                f"vl_loss {vl_loss:.4f} vl_acc@1 {vl_acc1:.2f} vl_acc@5 {vl_acc5:.2f} "
+                f"time {(time.time() - t0) / 60:.1f}m"
+            )
+            ckpt = {
                 "epoch": epoch,
                 "model": model.module.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "args": args,
             }
-
-            torch.save(
-                checkpoint_state, os.path.join(args.dir_output, "checkpoint_last.pth")
-            )
-            if top1_acc > best_acc:
-                best_acc = top1_acc
-                torch.save(
-                    checkpoint_state,
-                    os.path.join(args.dir_output, "checkpoint_best.pth"),
-                )
+            torch.save(ckpt, os.path.join(args.dir_output, "last.pth"))
+            if vl_acc1 > best_acc:
+                best_acc = vl_acc1
+                torch.save(ckpt, os.path.join(args.dir_output, "best.pth"))
 
     cleanup_distributed()
 
