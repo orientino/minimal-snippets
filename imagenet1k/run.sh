@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J in1k
+#SBATCH -J i1k
 #SBATCH --mail-type=end,fail
 #SBATCH --mail-user=chenxiang.zhang@uni.lu
 #SBATCH --account=p200535
@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus=4
 #SBATCH --partition=gpu
-#SBATCH --time=1-00:00:00
+#SBATCH --time=0-12:00:00
 #SBATCH --output=slurm-%x-%j.out
 
 echo -e "--------------------------------"
@@ -22,6 +22,8 @@ echo -e "--------------------------------\n"
 
 eval "$(micromamba shell hook --shell bash)"
 micromamba activate imagenet
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 DIR_DATA="/project/home/p200535/data/imagenet1k"
 DIR_OUTPUT="./checkpoints"

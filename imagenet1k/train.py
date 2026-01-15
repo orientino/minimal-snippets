@@ -109,7 +109,6 @@ def main():
 
         # Train
         model.train()
-        tr_loss, tr_n = 0, 0
         for step, (x, y) in enumerate(tr_loader):
             if step >= steps_per_epoch:
                 break
@@ -130,9 +129,8 @@ def main():
             nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
 
-            tr_loss += loss.item() * x.size(0)
-            tr_n += x.size(0)
             if rank == 0 and step % args.log_interval == 0:
+                print(f"ep {epoch} tr_loss {loss.item():.4f} lr {lr:.6f}")
                 wandb.log({"train/loss": loss.item(), "train/lr": lr})
 
         # Validate
