@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
+import wandb
 from data import create_dataloaders, mixup_criterion, mixup_data
 from model import vit_small_patch16_224
 from torch.amp import autocast
@@ -103,11 +104,8 @@ def main():
 
     if rank == 0:
         os.makedirs(args.dir_output, exist_ok=True)
-        print(f"Starting training on {world_size} GPUs")
-        print(f"Batch size per GPU: {args.bs}")
-        print(f"Total batch size: {args.bs * world_size}")
-        print(f"Model params: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
-        print(f"Steps per epoch: {steps_per_epoch}")
+        wandb.init(project="imagenet1k")
+        wandb.config.update(args)
 
     best_acc = 0.0
     for epoch in range(args.epochs):
@@ -140,7 +138,7 @@ def main():
             tr_loss += loss.item() * x.size(0)
             tr_n += x.size(0)
             if rank == 0 and step % args.log_interval == 0:
-                print(f"ep {epoch} step {step} loss {loss.item():.4f}")
+                wandb.log({"train/loss": loss.item(), "train/lr": lr})
 
         # Validate
         model.eval()
@@ -165,10 +163,13 @@ def main():
 
         # Logging and checkpointing
         if rank == 0:
-            print(
-                f"ep {epoch} "
-                f"vl_loss {vl_loss:.4f} vl_acc@1 {vl_acc1:.2f} vl_acc@5 {vl_acc5:.2f} "
-                f"time {(time.time() - t0) / 60:.1f}m"
+            wandb.log(
+                {
+                    "val/loss": vl_loss,
+                    "val/acc1": vl_acc1,
+                    "val/acc5": vl_acc5,
+                    "epoch_time_min": (time.time() - t0) / 60,
+                }
             )
             ckpt = {
                 "epoch": epoch,

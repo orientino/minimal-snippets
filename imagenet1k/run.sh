@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -J in1k_compile
+#SBATCH -J in1k
 #SBATCH --mail-type=end,fail
 #SBATCH --mail-user=chenxiang.zhang@uni.lu
 #SBATCH --account=p200535
