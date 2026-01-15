@@ -11,46 +11,43 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 import wandb
-from data import create_dataloaders, mixup_criterion, mixup_data
+from data import get_dataloaders
 from model import vit_small_patch16_224
 from torch.amp import autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 def setup_distributed():
-    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        rank = int(os.environ["RANK"])
-        world_size = int(os.environ["WORLD_SIZE"])
-        local_rank = int(os.environ["LOCAL_RANK"])
-    else:
-        rank = 0
-        world_size = 1
-        local_rank = 0
+    dist.init_process_group(backend="nccl")
+    local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
-    dist.init_process_group(
-        backend="nccl", init_method="env://", world_size=world_size, rank=rank
-    )
-    return rank, world_size, local_rank
-
-
-def cleanup_distributed():
-    dist.destroy_process_group()
+    return dist.get_rank(), dist.get_world_size(), local_rank
 
 
 def cosine_scheduler(base_lr, final_lr, epochs, steps_per_epoch, warmup_epochs=0):
+    """https://github.com/facebookresearch/dino/blob/main/utils.py#L187"""
     warmup_schedule = np.array([])
     warmup_iters = warmup_epochs * steps_per_epoch
     if warmup_epochs > 0:
         warmup_schedule = np.linspace(0, base_lr, warmup_iters)
-
     iters = np.arange(epochs * steps_per_epoch - warmup_iters)
     schedule = final_lr + 0.5 * (base_lr - final_lr) * (
         1 + np.cos(np.pi * iters / len(iters))
     )
-
     schedule = np.concatenate((warmup_schedule, schedule))
     assert len(schedule) == epochs * steps_per_epoch
     return schedule
+
+
+def mixup(x, y, num_classes, p=0.2):
+    """https://github.com/google-research/big_vision/blob/main/big_vision/utils.py#L1146"""
+    a = np.random.beta(p, p)
+    a = max(a, 1 - a)  # ensure a >= 0.5 so that `unrolled x` is dominant
+    mixed_x = a * x + (1 - a) * x.roll(1, dims=0)
+    y_onehot = torch.zeros(y.size(0), num_classes, device=y.device)
+    y_onehot.scatter_(1, y.unsqueeze(1), 1)  # one-hot encoding
+    mixed_y = a * y_onehot + (1 - a) * y_onehot.roll(1, dims=0)
+    return mixed_x, mixed_y
 
 
 def main():
@@ -59,10 +56,9 @@ def main():
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--wd", type=float, default=0.0001)
     parser.add_argument("--epochs", type=int, default=90)
-    parser.add_argument("--warmup_epochs", type=int, default=2)
+    parser.add_argument("--warmup_epochs", type=int, default=10)
+    parser.add_argument("--mixup_p", type=float, default=0.2)
     parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--mixup_prob", type=float, default=0.2)
-    parser.add_argument("--mixup_alpha", type=float, default=0.5)
     parser.add_argument("--dir_output", type=str, required=True)
     parser.add_argument("--dir_data", type=str, required=True)
     parser.add_argument("--num_workers", type=int, default=8)
@@ -76,7 +72,7 @@ def main():
     torch.cuda.manual_seed(42 + rank)
     torch.backends.cudnn.benchmark = True
 
-    tr_loader, vl_loader, steps_per_epoch = create_dataloaders(
+    tr_loader, vl_loader, steps_per_epoch = get_dataloaders(
         dir_data=args.dir_data,
         batch_size_per_gpu=args.bs,
         num_workers=args.num_workers,
@@ -123,13 +119,12 @@ def main():
                 p["lr"] = lr
 
             x, y = x.cuda(non_blocking=True), y.cuda(non_blocking=True)
-            if torch.rand(1).item() < args.mixup_prob:
-                x, y_a, y_b, lam = mixup_data(x, y, alpha=args.mixup_alpha)
-                with autocast("cuda", dtype=torch.bfloat16):
-                    loss = mixup_criterion(criterion, model(x), y_a, y_b, lam)
-            else:
-                with autocast("cuda", dtype=torch.bfloat16):
-                    loss = criterion(model(x), y)
+            x, y_soft = mixup(x, y, num_classes=1000, p=args.mixup_p)
+            with autocast("cuda", dtype=torch.bfloat16):
+                logits = model(x)
+                loss = -torch.sum(
+                    y_soft * torch.log_softmax(logits, dim=1), dim=1
+                ).mean()
             optimizer.zero_grad()
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
@@ -182,7 +177,7 @@ def main():
                 best_acc = vl_acc1
                 torch.save(ckpt, os.path.join(args.dir_output, "best.pth"))
 
-    cleanup_distributed()
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

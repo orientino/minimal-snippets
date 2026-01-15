@@ -4,8 +4,6 @@ Data loading for ImageNet-1k training.
 
 import os
 
-import numpy as np
-import torch
 import torch.distributed as dist
 import torchvision.transforms as T
 import webdataset as wds
@@ -13,22 +11,9 @@ from timm.data.auto_augment import rand_augment_transform
 from torch.utils.data import DataLoader
 
 IMAGENET_TRAIN_SAMPLES = 1281167
-IMAGENET_MEAN = [0.485, 0.456, 0.406]
-IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
-def mixup_data(x, y, alpha=0.5):
-    lam = np.random.beta(alpha, alpha)
-    index = torch.randperm(x.size(0), device=x.device)
-    mixed_x = lam * x + (1 - lam) * x[index]
-    return mixed_x, y, y[index], lam
-
-
-def mixup_criterion(criterion, pred, y_a, y_b, lam):
-    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
-
-
-def create_dataloaders(
+def get_dataloaders(
     dir_data,
     batch_size_per_gpu=256,
     num_workers=8,
@@ -39,14 +24,14 @@ def create_dataloaders(
 
     tr_transform = T.Compose(
         [
-            T.RandomResizedCrop(224, scale=(0.05, 1.0)),
+            T.RandomResizedCrop(224, scale=(0.08, 1.0)),
             T.RandomHorizontalFlip(),
             rand_augment_transform(
                 config_str="rand-m2-n10",
                 hparams={"translate_const": 100, "img_mean": (128, 128, 128)},
             ),
             T.ToTensor(),
-            T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+            T.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
     )
     vl_transform = T.Compose(
@@ -54,10 +39,9 @@ def create_dataloaders(
             T.Resize(256),
             T.CenterCrop(224),
             T.ToTensor(),
-            T.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+            T.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
         ]
     )
-
     tr_dataset = (
         wds.WebDataset(
             os.path.join(dir_data, "imagenet1k-train-{0000..1023}.tar"),
@@ -77,7 +61,6 @@ def create_dataloaders(
         .decode("pil")
         .map(lambda x: (vl_transform(x["jpg"]), int(x["cls"])))
     )
-
     tr_loader = DataLoader(
         tr_dataset,
         batch_size=batch_size_per_gpu,
