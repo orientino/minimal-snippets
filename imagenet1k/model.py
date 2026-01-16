@@ -1,6 +1,6 @@
 """
-Vision Transformer Small (ViT-S/16) implementation.
-Follows big_vision's architecture with 2D sincos positional embeddings and GAP.
+Vision Transformer Small (ViT-S/16) for ImageNet-1K.
+https://arxiv.org/abs/2205.01580
 """
 
 import numpy as np
@@ -9,32 +9,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-def get_2d_sincos_pos_embed(embed_dim, grid_size):
-    grid_h = np.arange(grid_size, dtype=np.float32)
-    grid_w = np.arange(grid_size, dtype=np.float32)
-    grid = np.meshgrid(grid_w, grid_h)
-    grid = np.stack(grid, axis=0)
-    grid = grid.reshape([2, 1, grid_size, grid_size])
-    return get_2d_sincos_pos_embed_from_grid(embed_dim, grid)
-
-
-def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
-    assert embed_dim % 2 == 0
-    emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])
-    emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])
-    return np.concatenate([emb_h, emb_w], axis=1)
-
-
-def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
-    assert embed_dim % 2 == 0
-    omega = np.arange(embed_dim // 2, dtype=np.float32)
-    omega /= embed_dim / 2.0
-    omega = 1.0 / 10000**omega
-    pos = pos.reshape(-1)
-    out = np.einsum("m,d->md", pos, omega)
-    emb_sin = np.sin(out)
-    emb_cos = np.cos(out)
-    return np.concatenate([emb_sin, emb_cos], axis=1)
+def posemb_sincos_2d(h, w, width, temperature=10_000.0):
+    """https://github.com/google-research/big_vision/blob/main/big_vision/models/vit.py#L34"""
+    y, x = np.mgrid[:h, :w]
+    assert width % 4 == 0, "Width must be mult of 4 for sincos posemb"
+    omega = np.arange(width // 4) / (width // 4 - 1)
+    omega = 1.0 / (temperature**omega)
+    y = np.einsum("m,d->md", y.flatten().astype(np.float32), omega)
+    x = np.einsum("m,d->md", x.flatten().astype(np.float32), omega)
+    return np.concatenate([np.sin(x), np.cos(x), np.sin(y), np.cos(y)], axis=1)
 
 
 class PatchEmbed(nn.Module):
@@ -126,13 +109,10 @@ class VisionTransformer(nn.Module):
             in_chans=in_chans,
             embed_dim=embed_dim,
         )
-
-        pos_embed = get_2d_sincos_pos_embed(
-            embed_dim, int(self.patch_embed.num_patches**0.5)
-        )
-        self.register_buffer(
-            "pos_embed", torch.from_numpy(pos_embed).float().unsqueeze(0)
-        )
+        grid_size = self.patch_embed.grid_size
+        pos_embed = posemb_sincos_2d(grid_size, grid_size, embed_dim)
+        pos_embed = torch.from_numpy(pos_embed).float().unsqueeze(0)
+        self.register_buffer("pos_embed", pos_embed)
 
         self.blocks = nn.ModuleList(
             [
@@ -150,17 +130,15 @@ class VisionTransformer(nn.Module):
     def _init_weights(self):
         w = self.patch_embed.proj.weight.data
         torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-
         for block in self.blocks:
             nn.init.xavier_uniform_(block.attn.qkv.weight)
             nn.init.zeros_(block.attn.qkv.bias)
             nn.init.xavier_uniform_(block.attn.proj.weight)
             nn.init.zeros_(block.attn.proj.bias)
             nn.init.xavier_uniform_(block.mlp.fc1.weight)
-            nn.init.zeros_(block.mlp.fc1.bias)
+            nn.init.normal_(block.mlp.fc1.bias, std=1e-6)
             nn.init.xavier_uniform_(block.mlp.fc2.weight)
-            nn.init.zeros_(block.mlp.fc2.bias)
-
+            nn.init.normal_(block.mlp.fc2.bias, std=1e-6)
         nn.init.zeros_(self.head.weight)
         nn.init.zeros_(self.head.bias)
 
@@ -189,14 +167,10 @@ def vit_small_patch16_224(num_classes=1000):
 
 
 if __name__ == "__main__":
-    # Test model
     model = vit_small_patch16_224()
     x = torch.randn(2, 3, 224, 224)
     y = model(x)
     print(f"Input shape: {x.shape}")
     print(f"Output shape: {y.shape}")
     print(f"Positional embedding shape: {model.pos_embed.shape}")
-
-    # Count parameters
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"Total parameters: {n_params / 1e6:.2f}M")
+    print(f"Total parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
