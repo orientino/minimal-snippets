@@ -24,10 +24,10 @@ def get_dataloaders(
 
     tr_transform = T.Compose(
         [
-            T.RandomResizedCrop(224, scale=(0.08, 1.0)),
+            T.RandomResizedCrop(224, scale=(0.05, 1.0)),
             T.RandomHorizontalFlip(),
             rand_augment_transform(
-                config_str="rand-m2-n10",
+                config_str="rand-m10-n2",
                 hparams={"translate_const": 100, "img_mean": (128, 128, 128)},
             ),
             T.ToTensor(),
