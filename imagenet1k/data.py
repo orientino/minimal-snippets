@@ -10,7 +10,7 @@ import webdataset as wds
 from timm.data.auto_augment import rand_augment_transform
 from torch.utils.data import DataLoader
 
-IMAGENET_TRAIN_SAMPLES = 1281167
+IMAGENET_TRAIN_SAMPLES = 1_281_167
 
 
 def get_dataloaders(
@@ -48,7 +48,7 @@ def get_dataloaders(
             shardshuffle=True,
             nodesplitter=wds.split_by_node,
         )
-        .shuffle(5000)
+        .shuffle(250_000)
         .decode("pil")
         .map(lambda x: (tr_transform(x["jpg"]), int(x["cls"])))
     )

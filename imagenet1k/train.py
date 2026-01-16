@@ -67,6 +67,10 @@ def main():
     args = parser.parse_args()
 
     rank, world_size, local_rank = setup_distributed()
+    if rank == 0:
+        os.makedirs(args.dir_output, exist_ok=True)
+        wandb.init(project="imagenet1k")
+        wandb.config.update(args)
 
     torch.manual_seed(42 + rank)
     torch.cuda.manual_seed(42 + rank)
@@ -97,11 +101,6 @@ def main():
         steps_per_epoch=steps_per_epoch,
         warmup_epochs=args.warmup_epochs,
     )
-
-    if rank == 0:
-        os.makedirs(args.dir_output, exist_ok=True)
-        wandb.init(project="imagenet1k")
-        wandb.config.update(args)
 
     best_acc = 0.0
     for epoch in range(args.epochs):
