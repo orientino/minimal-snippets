@@ -88,10 +88,21 @@ def main():
     model = DDP(model, device_ids=[local_rank], output_device=local_rank)
     model = torch.compile(model) if args.compile else model
     criterion = nn.CrossEntropyLoss()
+
+    # apply weight decay only on weight tensors
+    wd = lambda n: ".bias" not in n and ".norm" not in n
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        [
+            {
+                "params": [p for n, p in model.named_parameters() if wd(n)],
+                "weight_decay": args.wd,
+            },
+            {
+                "params": [p for n, p in model.named_parameters() if not wd(n)],
+                "weight_decay": 0.0,
+            },
+        ],
         lr=args.lr,
-        weight_decay=args.wd,
         betas=(0.9, 0.999),
     )
     scheduler = cosine_scheduler(
