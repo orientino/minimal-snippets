@@ -124,6 +124,7 @@ class VisionTransformer(nn.Module):
         )
 
         self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
+        self.pre_logits = nn.Linear(embed_dim, embed_dim)
         self.head = nn.Linear(embed_dim, num_classes)
         self._init_weights()
 
@@ -139,6 +140,7 @@ class VisionTransformer(nn.Module):
             nn.init.normal_(block.mlp.fc1.bias, std=1e-6)
             nn.init.xavier_uniform_(block.mlp.fc2.weight)
             nn.init.normal_(block.mlp.fc2.bias, std=1e-6)
+        nn.init.zeros_(self.pre_logits.bias)
         nn.init.zeros_(self.head.weight)
         nn.init.zeros_(self.head.bias)
 
@@ -149,6 +151,8 @@ class VisionTransformer(nn.Module):
             x = block(x)
         x = self.norm(x)
         x = x.mean(dim=1)
+        x = self.pre_logits(x)
+        x = F.tanh(x)
         x = self.head(x)
         return x
 
