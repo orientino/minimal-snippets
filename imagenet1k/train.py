@@ -24,18 +24,30 @@ def setup_distributed():
     return dist.get_rank(), dist.get_world_size(), local_rank
 
 
-def cosine_scheduler(base_lr, final_lr, epochs, steps_per_epoch, warmup_epochs=0):
+def cosine_scheduler(base_lr, final_lr, total_steps, warm_steps=0):
     """https://github.com/facebookresearch/dino/blob/main/utils.py#L187"""
-    warmup_schedule = np.array([])
-    warmup_iters = warmup_epochs * steps_per_epoch
-    if warmup_epochs > 0:
-        warmup_schedule = np.linspace(0, base_lr, warmup_iters)
-    iters = np.arange(epochs * steps_per_epoch - warmup_iters)
+    warm_schedule = np.array([])
+    if warm_steps > 0:
+        warm_schedule = np.linspace(0, base_lr, warm_steps)
+    iters = np.arange(total_steps - warm_steps)
     schedule = final_lr + 0.5 * (base_lr - final_lr) * (
         1 + np.cos(np.pi * iters / len(iters))
     )
-    schedule = np.concatenate((warmup_schedule, schedule))
-    assert len(schedule) == epochs * steps_per_epoch
+    schedule = np.concatenate((warm_schedule, schedule))
+    assert len(schedule) == total_steps
+    return schedule
+
+
+def wsc_scheduler(base_lr, final_lr, total_steps, warm_steps=0, cool_steps=0):
+    warm_schedule = np.array([])
+    cool_schedule = np.array([])
+    if warm_steps > 0:
+        warm_schedule = np.linspace(0, base_lr, warm_steps)
+    if cool_steps > 0:
+        cool_schedule = np.linspace(base_lr, final_lr, cool_steps)
+    stable_schedule = np.array([base_lr] * (total_steps - warm_steps - cool_steps))
+    schedule = np.concatenate((warm_schedule, stable_schedule, cool_schedule))
+    assert len(schedule) == total_steps
     return schedule
 
 
@@ -52,6 +64,7 @@ def mixup(x, y, num_classes, p=0.2):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--bs", type=int, default=256)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--wd", type=float, default=0.0001)
@@ -67,14 +80,14 @@ def main():
     args = parser.parse_args()
 
     rank, world_size, local_rank = setup_distributed()
+    np.random.seed(args.seed + rank)
+    torch.manual_seed(args.seed + rank)
+    torch.cuda.manual_seed(args.seed + rank)
+    torch.backends.cudnn.benchmark = True
     if rank == 0:
         os.makedirs(args.dir_output, exist_ok=True)
         wandb.init(project="imagenet1k")
         wandb.config.update(args)
-
-    torch.manual_seed(42 + rank)
-    torch.cuda.manual_seed(42 + rank)
-    torch.backends.cudnn.benchmark = True
 
     tr_loader, vl_loader, steps_per_epoch = get_dataloaders(
         dir_data=args.dir_data,
@@ -89,29 +102,24 @@ def main():
     model = torch.compile(model) if args.compile else model
     criterion = nn.CrossEntropyLoss()
 
-    # apply weight decay only on weight tensors
-    wd = lambda n: ".bias" not in n and ".norm" not in n
-    optimizer = torch.optim.AdamW(
-        [
-            {
-                "params": [p for n, p in model.named_parameters() if wd(n)],
-                "weight_decay": args.wd,
-            },
-            {
-                "params": [p for n, p in model.named_parameters() if not wd(n)],
-                "weight_decay": 0.0,
-            },
-        ],
+    optimizer = torch.optim.Adam(
+        model.parameters(),
         lr=args.lr,
         betas=(0.9, 0.999),
     )
     scheduler = cosine_scheduler(
         base_lr=args.lr,
         final_lr=0,
-        epochs=args.epochs,
-        steps_per_epoch=steps_per_epoch,
-        warmup_epochs=args.warmup_epochs,
+        total_steps=args.epochs * steps_per_epoch,
+        warm_steps=args.warmup_epochs * steps_per_epoch,
     )
+    # scheduler = wsc_scheduler(
+    #     base_lr=args.lr,
+    #     final_lr=0,
+    #     total_steps=args.epochs * steps_per_epoch,
+    #     warm_steps=args.warmup_epochs * steps_per_epoch,
+    #     cool_steps=int(0.2 * args.epochs * steps_per_epoch),
+    # )
 
     best_acc = 0.0
     for epoch in range(args.epochs):
@@ -138,6 +146,15 @@ def main():
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
+
+            # decouple weight decay from learning rate
+            # pytorch adamw: p -= lr * wd * p
+            # true decouple: p -= wd * p
+            with torch.no_grad():
+                mult = lr / args.lr
+                for n, p in model.named_parameters():
+                    if ".bias" not in n and ".norm" not in n:
+                        p.data.mul_(1 - args.wd * mult)
 
             if rank == 0 and step % args.log_interval == 0:
                 print(f"ep {epoch} tr_loss {loss.item():.4f} lr {lr:.6f}")
@@ -172,6 +189,9 @@ def main():
                     "val/acc1": vl_acc1,
                     "val/acc5": vl_acc5,
                     "epoch_time_min": (time.time() - t0) / 60,
+                    "norm_l2": torch.sqrt(
+                        sum(torch.sum(p**2) for p in model.parameters())
+                    ).item(),
                 }
             )
             ckpt = {

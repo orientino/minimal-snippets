@@ -31,7 +31,7 @@ DIR_OUTPUT="./checkpoints"
 EPOCHS=90
 BS=256  # Per GPU (total = 256 * 4 = 1024)
 LR=0.001
-WD=0.01
+WD=0.1
 WARMUP_EPOCHS=10
 
 torchrun \
