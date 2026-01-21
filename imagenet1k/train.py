@@ -117,8 +117,12 @@ def main():
     for epoch in range(args.epochs):
         t0 = time.time()
 
+        # Train
         model.train()
         for step, (x, y) in enumerate(tr_loader):
+            if step >= steps_per_epoch:
+                break
+
             lr = scheduler[epoch * steps_per_epoch + step]
             for p in optimizer.param_groups:
                 p["lr"] = lr

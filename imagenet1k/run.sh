@@ -11,7 +11,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus=4
 #SBATCH --partition=gpu
-#SBATCH --time=0-12:00:00
+#SBATCH --time=0-08:00:00
 #SBATCH --output=slurm-%x-%j.out
 
 echo -e "--------------------------------"
@@ -31,7 +31,7 @@ DIR_OUTPUT="./checkpoints"
 EPOCHS=90
 BS=256  # Per GPU (total = 256 * 4 = 1024)
 LR=0.001
-WD=0.0001
+WD=0.01
 WARMUP_EPOCHS=10
 
 torchrun \
