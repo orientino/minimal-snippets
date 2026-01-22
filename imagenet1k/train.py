@@ -25,7 +25,6 @@ def setup_distributed():
 
 
 def cosine_scheduler(base_lr, final_lr, total_steps, warm_steps=0):
-    """https://github.com/facebookresearch/dino/blob/main/utils.py#L187"""
     warm_schedule = np.array([])
     if warm_steps > 0:
         warm_schedule = np.linspace(0, base_lr, warm_steps)
@@ -69,7 +68,8 @@ def main():
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--wd", type=float, default=0.0001)
     parser.add_argument("--epochs", type=int, default=90)
-    parser.add_argument("--warmup_epochs", type=int, default=10)
+    parser.add_argument("--warm_ratio", type=float, default=0.1)
+    parser.add_argument("--cool_ratio", type=float, default=0.4)
     parser.add_argument("--mixup_p", type=float, default=0.2)
     parser.add_argument("--grad_clip", type=float, default=1.0)
     parser.add_argument("--dir_output", type=str, required=True)
@@ -102,24 +102,25 @@ def main():
     model = torch.compile(model) if args.compile else model
     criterion = nn.CrossEntropyLoss()
 
+    total_steps = args.epochs * steps_per_epoch
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=args.lr,
         betas=(0.9, 0.999),
     )
-    scheduler = cosine_scheduler(
-        base_lr=args.lr,
-        final_lr=0,
-        total_steps=args.epochs * steps_per_epoch,
-        warm_steps=args.warmup_epochs * steps_per_epoch,
-    )
-    # scheduler = wsc_scheduler(
+    # scheduler = cosine_scheduler(
     #     base_lr=args.lr,
     #     final_lr=0,
-    #     total_steps=args.epochs * steps_per_epoch,
-    #     warm_steps=args.warmup_epochs * steps_per_epoch,
-    #     cool_steps=int(0.2 * args.epochs * steps_per_epoch),
+    #     total_steps=total_steps,
+    #     warm_steps=int(args.warm_ratio * total_steps),
     # )
+    scheduler = wsc_scheduler(
+        base_lr=args.lr,
+        final_lr=0,
+        total_steps=total_steps,
+        warm_steps=int(args.warm_ratio * total_steps),
+        cool_steps=int(args.cool_ratio * total_steps),
+    )
 
     best_acc = 0.0
     for epoch in range(args.epochs):
