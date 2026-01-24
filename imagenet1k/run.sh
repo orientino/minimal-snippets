@@ -28,11 +28,12 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3
 DIR_DATA="/project/home/p200535/data/imagenet1k"
 DIR_OUTPUT="./checkpoints"
 
-EPOCHS=90
 BS=256  # Per GPU (total = 256 * 4 = 1024)
 LR=0.001
-WD=0.1
-WARMUP_EPOCHS=10
+WD=0.0001
+EPOCHS=90
+WARM_RATIO=0.1
+COOL_RATIO=0.4
 
 torchrun \
     --standalone \
@@ -43,7 +44,8 @@ torchrun \
     --lr $LR \
     --wd $WD \
     --epochs $EPOCHS \
-    --warmup_epochs $WARMUP_EPOCHS \
+    --warm_ratio $WARM_RATIO \
+    --cool_ratio $COOL_RATIO \
     --dir_data $DIR_DATA \
     --dir_output $DIR_OUTPUT \
     --num_workers 16 \

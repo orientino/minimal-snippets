@@ -115,17 +115,16 @@ class VisionTransformer(nn.Module):
         self.register_buffer("pos_embed", pos_embed)
 
         self.blocks = nn.ModuleList(
+            [TransformerBlock(embed_dim, num_heads, mlp_ratio) for _ in range(depth)]
+        )
+        self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
+        self.head = nn.ModuleList(
             [
-                TransformerBlock(
-                    dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio
-                )
-                for _ in range(depth)
+                nn.Linear(embed_dim, embed_dim),
+                nn.Tanh(),
+                nn.Linear(embed_dim, num_classes),
             ]
         )
-
-        self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
-        self.pre_logits = nn.Linear(embed_dim, embed_dim)
-        self.head = nn.Linear(embed_dim, num_classes)
         self._init_weights()
 
     def _init_weights(self):
@@ -140,9 +139,9 @@ class VisionTransformer(nn.Module):
             nn.init.normal_(block.mlp.fc1.bias, std=1e-6)
             nn.init.xavier_uniform_(block.mlp.fc2.weight)
             nn.init.normal_(block.mlp.fc2.bias, std=1e-6)
-        nn.init.zeros_(self.pre_logits.bias)
-        nn.init.zeros_(self.head.weight)
-        nn.init.zeros_(self.head.bias)
+        nn.init.zeros_(self.head[0].bias)
+        nn.init.zeros_(self.head[2].weight)
+        nn.init.zeros_(self.head[2].bias)
 
     def forward(self, x):
         x = self.patch_embed(x)
@@ -151,9 +150,8 @@ class VisionTransformer(nn.Module):
             x = block(x)
         x = self.norm(x)
         x = x.mean(dim=1)
-        x = self.pre_logits(x)
-        x = F.tanh(x)
-        x = self.head(x)
+        for layer in self.head:
+            x = layer(x)
         return x
 
 

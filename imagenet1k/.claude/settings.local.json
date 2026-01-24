@@ -5,7 +5,8 @@
       "WebFetch(domain:ar5iv.org)",
       "WebFetch(domain:ar5iv.labs.arxiv.org)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(python model.py:*)"
     ]
   }
 }
