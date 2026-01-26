@@ -1,8 +1,11 @@
 # Minimal Snippets
-Collection of snippets for ML research in PyTorch. Each file is self-contained. 
+Collection of snippets for ML research in PyTorch. Each file is self-contained and minimal. 
 
 ## CIFAR
 100 lines of code to achieve ~94% test accuracy with ResNet18 using training, validation, and test splits. There's also a separate code to evaluate CIFAR-Corrupted datasets. Find more information in the `cifar/` folder.
+
+## ImageNet1K
+Distributed training to achieve ~78% test accuracy with ViT-S/16 for 90epochs in ~6hours, replicating and slightly improving the results of [Beyer et al. 2022](https://arxiv.org/pdf/2205.01580). The dataset is donwloaded from huggingface.
 
 ## Waterbirds
 Image binary classification with the background feature as the spurious correlation. Our code automatically downloads the dataset, trains a ResNet50, and evaluates the test accuracy and worst-group accuracy.
