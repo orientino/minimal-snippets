@@ -24,19 +24,6 @@ def setup_distributed():
     return dist.get_rank(), dist.get_world_size(), local_rank
 
 
-def cosine_scheduler(base_lr, final_lr, total_steps, warm_steps=0):
-    warm_schedule = np.array([])
-    if warm_steps > 0:
-        warm_schedule = np.linspace(0, base_lr, warm_steps)
-    iters = np.arange(total_steps - warm_steps)
-    schedule = final_lr + 0.5 * (base_lr - final_lr) * (
-        1 + np.cos(np.pi * iters / len(iters))
-    )
-    schedule = np.concatenate((warm_schedule, schedule))
-    assert len(schedule) == total_steps
-    return schedule
-
-
 def wsc_scheduler(base_lr, final_lr, total_steps, warm_steps=0, cool_steps=0):
     warm_schedule = np.array([])
     cool_schedule = np.array([])
@@ -108,12 +95,6 @@ def main():
         lr=args.lr,
         betas=(0.9, 0.999),
     )
-    # scheduler = cosine_scheduler(
-    #     base_lr=args.lr,
-    #     final_lr=0,
-    #     total_steps=total_steps,
-    #     warm_steps=int(args.warm_ratio * total_steps),
-    # )
     scheduler = wsc_scheduler(
         base_lr=args.lr,
         final_lr=0,
